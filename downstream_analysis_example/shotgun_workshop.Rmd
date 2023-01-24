@@ -1,0 +1,201 @@
+---
+title: "Shotgun Workshop - Downstream analysis with R"
+author: "Hena R. Ramay & Ewandson L. Lameu"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    theme: yeti
+    highlight: kate
+    toc: true
+    toc_float: 
+      collapsed: false
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+keep_md: no
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,message = F,warning = F,fig.height = 5,fig.width = 7, include = T)
+```
+
+# **Loading, editing and converting data to a Phyloseq Object**
+
+Before running the following R code, please make sure that you have downloaded the complete example folder with data folder inside it.
+
+ <br>
+ 
+### Load Libraries
+```{r libraries, echo=T}
+library(tidyverse)
+library(phyloseq)
+
+
+```
+
+<br>
+
+### Setup data files 
+```{r 2, echo=T}
+# load otu table
+otu <- read_delim(file="data/merged_raw_counts_species.txt") %>% 
+                  data.frame() %>%
+                  filter(clade_name!="UNCLASSIFIED")  # needs to be a dataframe
+                                                                                         
+rownames(otu)<-otu$clade_name  # add row names
+
+#create taxa table
+taxa <- otu %>% select(clade_name) %>% separate(col=clade_name, 
+                                                into = c("Kingdom",
+                                                         "Phylum",
+                                                         "Class",
+                                                         "Order",
+                                                         "Family",
+                                                         "Genus",
+                                                         "Species"),
+                                                sep="[|]") %>% 
+                                      as.matrix()  # needs to be a matrix
+
+otu<-otu %>% select(-clade_name)  # delete the clade_name column   
+colnames(otu)<-str_remove_all(string=colnames(otu),
+                              pattern="_metaphlan") # format column names 
+
+# load sample info (metadata) table
+sample_info<-read_delim(file="data/sample_info.csv") %>% 
+                        data.frame() # needs to be a dataframe
+rownames(sample_info)<-sample_info$Sample  # add row names 
+
+```
+
+<br>
+
+### Create a Phyloseq Object
+```{r phyloseq object}
+# create phyloseq object
+ps<- phyloseq(otu_table(otu, taxa_are_rows = T), 
+              tax_table(taxa),
+              sample_data(sample_info)) 
+
+```
+
+<br>
+
+### Prune Samples by total number of reads
+```{r filtering samples and taxa based on number of reads}
+
+# filtering samples
+colSums(ps@otu_table) # check sample reads
+
+# remove samples S8 with no reads
+samples_to_keep<- ps@sam_data$Sample[ps@sam_data$Sample!="S8"]
+ps <- prune_samples(samples = samples_to_keep, ps)  # now S8 was removed from ps
+
+# Another way of doing this is
+# ps@sam_data<-ps@sam_data %>% data.frame() %>% filter(Sample !="S8") %>% sample_data()
+
+
+```
+<br>
+
+### Prune Taxa by total number of reads
+```{r filtering taxa based on number of reads}
+
+# filtering taxa
+unname(taxa_sums(ps)) # check taxa reads, unname removes the taxa names as they are very long.
+ps<- prune_taxa(taxa_sums(ps)>5000, ps)    # remove taxa with less than 5000 reads, 
+                                           # please use appropriate value specific to your dataset
+
+
+```
+
+<br>
+
+### Create relative abundance and Top 5 taxa files
+
+```{r relative abundance and top5 taxas}
+# relative abundance table
+ps_rel_abun <- ps %>% transform_sample_counts(function(x) x/sum(x))
+
+# transformed data, to be used for beta diversity. 
+#You can use other transformations too for beta diversity like VST,CLR etc
+ps_log <- ps %>% transform_sample_counts(function(x) log(x+1))
+
+# Prune only the top 5 taxas
+
+top5 <- names(sort(taxa_sums(ps), decreasing = T))[1:5]   # names of top 5 taxas
+ps_top5 <-prune_taxa(taxa=top5, ps) # prune to keep only the top 5 on the phyloseq object
+
+```
+
+<br>
+
+# **Abundance Plots**
+
+```{r abundance plots}
+
+#abundance plots for count reads
+plot_bar(physeq=ps, fill="Phylum")
+
+#abundance plots for relative abundances
+plot_bar(physeq=ps_rel_abun, fill="Phylum")
+
+#abundance plots for count reads over the top 5 taxa only
+plot_bar(physeq=ps_top5, fill="Phylum")
+
+
+```
+
+<br>
+
+# **Alpha Diversity**
+
+```{r alpha diversity}
+
+# plot alpha diversity for the chosen distance metric
+plot_richness(ps, x ="Type", measures = c("Shannon","Observed","Simpson"),
+              color = "Type")
+
+# plot alpha diversity in boxplot format for the chosen distance metric
+plot_richness(ps, x ="Type", measures = c("Shannon","Observed","Simpson"),
+              color = "Type") +
+              geom_boxplot()
+
+# save richness in a table
+richness <- estimate_richness(ps, measures=c("Shannon","Observed","Simpson"))
+
+```
+
+
+<br>
+
+# **Beta Diversity**
+
+```{r beta diversity}
+
+# calculate the distance matrix with the transformed log data
+
+ordinate<- ordinate(physeq=ps_log, method = "PCoA", distance = "bray")
+
+
+# plot beta diversity
+p2 <-
+    plot_ordination(
+        physeq = ps_log,
+        ordination = ordinate,
+        color = "Type",
+        label = "Sample"
+    ) + geom_point(size = 5) + theme_bw()
+
+p2
+
+# One way to show separation of Types is by adding polygons
+p2 +  geom_polygon(aes(fill=Type))
+
+```
+
+
+We are stopping here for the sake of time but you can do a few more analysis with this data like differential abundance analysis.
+
+
+
